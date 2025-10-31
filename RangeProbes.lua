@@ -2,97 +2,89 @@ local ADDON, ns = ...
 local Probes = {}
 ns.Probes = Probes
 
--------------------------------------------------------
--- Friendly spell probes per class
--- These should all work on friendly units.
--------------------------------------------------------
-local FRIENDLY_PROBES = {
+-- Map spellIDs → range; resolve names via GetSpellInfo (locale-safe).
+local CLASS_SPELLS = {
   PRIEST = {
-    { spell = "Flash Heal", range = 40 },
-    { spell = "Power Word: Shield", range = 30 },
-    { spell = "Lesser Heal", range = 20 },
+    { id = 2061, range = 40 },  -- Flash Heal
+    { id = 17,   range = 30 },  -- Power Word: Shield
   },
   DRUID = {
-    { spell = "Rejuvenation", range = 40 },
-    { spell = "Mark of the Wild", range = 30 },
+    { id = 774,  range = 40 },  -- Rejuvenation
+    { id = 1126, range = 30 },  -- Mark of the Wild
   },
   PALADIN = {
-    { spell = "Flash of Light", range = 40 },
-    { spell = "Blessing of Kings", range = 30 },
+    { id = 19750, range = 40 }, -- Flash of Light
+    { id = 20217, range = 30 }, -- Blessing of Kings
   },
   SHAMAN = {
-    { spell = "Lesser Healing Wave", range = 40 },
-    { spell = "Cure Poison", range = 30 },
+    { id = 8004,  range = 40 }, -- Lesser Healing Wave
+    { id = 526,   range = 30 }, -- Cure Poison (ally)
   },
   MAGE = {
-    { spell = "Arcane Intellect", range = 30 },
+    { id = 1459,  range = 30 }, -- Arcane Intellect
   },
   WARLOCK = {
-    { spell = "Unending Breath", range = 30 },
+    { id = 5697,  range = 30 }, -- Unending Breath
   },
   HUNTER = {
-    { spell = "Aspect of the Pack", range = 30 },
+    -- Hunters: few ally singles; rely mostly on interact fallbacks
   },
   WARRIOR = {
-    { spell = "Intervene", range = 25 },
+    -- No friendly singles; rely on interact fallbacks
   },
   ROGUE = {
-    { spell = "Tricks of the Trade", range = 20 },
-  },
-  DEATHKNIGHT = {
-    { spell = "Death Coil", range = 30 }, -- placeholder (WotLK+)
+    -- Few ally singles; rely on interact fallbacks
   },
 }
 
--------------------------------------------------------
--- Detect player class once
--------------------------------------------------------
-local _, playerClass = UnitClass("player")
-local CLASS_PROBES = FRIENDLY_PROBES[playerClass] or {}
+-- Build resolved probe list once
+local _, CLASS = UnitClass("player")
+local RESOLVED = {}
+do
+  local list = CLASS_SPELLS[CLASS] or {}
+  for _, p in ipairs(list) do
+    local name = GetSpellInfo(p.id)
+    if name then
+      RESOLVED[#RESOLVED+1] = { name = name, range = p.range }
+    end
+  end
+end
 
--------------------------------------------------------
--- Utility: get bracket from all probes
--------------------------------------------------------
+-- Returns lower, upper, estimate (yards)
 function Probes:GetRangeBracket(unit)
   if not UnitExists(unit) then return nil end
-
   local lower, upper = 0, 40
 
-  -- Friendly spell probes
-  for _, probe in ipairs(CLASS_PROBES) do
-    local inRange = IsSpellInRange(probe.spell, unit)
-    if inRange == 1 then
-      upper = math.min(upper, probe.range)
-    elseif inRange == 0 then
-      lower = math.max(lower, probe.range)
+  -- Friendly spell probes (if any)
+  for _, p in ipairs(RESOLVED) do
+    local r = IsSpellInRange(p.name, unit)
+    if r == 1 then
+      upper = math.min(upper, p.range)
+    elseif r == 0 then
+      lower = math.max(lower, p.range)
     end
   end
 
-  -- Universal interact fallbacks
+  -- Universal interact fallbacks (very reliable)
+  -- 3: Duel (~9-10y). If true, upper ≤ 10; else lower ≥ 10
   if CheckInteractDistance(unit, 3) then
     upper = math.min(upper, 10)
   else
     lower = math.max(lower, 10)
   end
-
+  -- 4: Follow (~28y). If true, upper ≤ 28; else lower ≥ 28
   if CheckInteractDistance(unit, 4) then
     upper = math.min(upper, 28)
   else
     lower = math.max(lower, 28)
   end
 
-  -- Safety clamps
   if upper < lower then upper = lower end
-
   local estimate = (lower + upper) / 2
   return lower, upper, estimate
 end
 
--------------------------------------------------------
--- Example integration
--- (Called by Range.lua each update)
--------------------------------------------------------
 function Probes:GetEstimate(unit)
-  local lower, upper, estimate = self:GetRangeBracket(unit)
-  return estimate or 40
+  local _, _, e = self:GetRangeBracket(unit)
+  return e or 40
 end
